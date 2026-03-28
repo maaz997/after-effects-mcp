@@ -2,14 +2,12 @@
 
 ![Node.js](https://img.shields.io/badge/node-%3E=14.x-brightgreen.svg)
 ![Build](https://img.shields.io/badge/build-passing-success)
-![License](https://img.shields.io/github/license/Dakkshin/after-effects-mcp)
+![License](https://img.shields.io/github/license/maaz997/after-effects-mcp)
 ![Platform](https://img.shields.io/badge/platform-after%20effects-blue)
 
 ✨ A Model Context Protocol (MCP) server for Adobe After Effects that enables AI assistants and other applications to control After Effects through a standardized protocol.
 
-<a href="https://glama.ai/mcp/servers/@Dakkshin/after-effects-mcp">
-  <img width="380" height="200" src="https://glama.ai/mcp/servers/@Dakkshin/after-effects-mcp/badge" alt="mcp-after-effects MCP server" />
-</a>
+**Repository:** [github.com/maaz997/after-effects-mcp](https://github.com/maaz997/after-effects-mcp)
 
 ## Table of Contents
 - [Features](#features)
@@ -60,9 +58,10 @@
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/Dakkshin/after-effects-mcp.git
+   git clone git@github.com:maaz997/after-effects-mcp.git
    cd after-effects-mcp
    ```
+   (HTTPS: `git clone https://github.com/maaz997/after-effects-mcp.git`)
 
 2. **Install dependencies**
    ```bash
@@ -95,7 +94,7 @@ Go to your client (eg. Claude or Cursor ) and update your config file
   "mcpServers": {
     "AfterEffectsMCP": {
       "command": "node",
-      "args": ["C:\\Users\\Dakkshin\\after-effects-mcp\\build\\index.js"]
+      "args": ["/absolute/path/to/after-effects-mcp/build/index.js"]
     }
   }
 }
@@ -206,7 +205,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Dakkshin/after-effects-mcp&type=date&legend=top-left)](https://www.star-history.com/#Dakkshin/after-effects-mcp&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=maaz997/after-effects-mcp&type=date&legend=top-left)](https://www.star-history.com/#maaz997/after-effects-mcp&type=date&legend=top-left)
 
 ## License
 

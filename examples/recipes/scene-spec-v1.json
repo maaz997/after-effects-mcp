@@ -1,0 +1,35 @@
+{
+  "script": "applySceneSpec",
+  "parameters": {
+    "spec": {
+      "version": 1,
+      "compName": "scene_01",
+      "steps": [
+        {
+          "invoke": "renameLayer",
+          "args": { "layerIndex": 1, "newName": "Hero" }
+        },
+        {
+          "invoke": "setLayerKeyframe",
+          "args": {
+            "layerIndex": 1,
+            "propertyName": "Opacity",
+            "timeInSeconds": 0,
+            "value": 0
+          }
+        },
+        {
+          "invoke": "setLayerKeyframe",
+          "args": {
+            "layerIndex": 1,
+            "propertyName": "Opacity",
+            "timeInSeconds": 1,
+            "value": 100
+          }
+        }
+      ]
+    }
+  },
+  "waitForResult": true,
+  "waitTimeoutMs": 120000
+}
