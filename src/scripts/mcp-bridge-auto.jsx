@@ -1251,7 +1251,9 @@ function getBridgeCapabilities(args) {
         bridgeApiVersion: "2.0",
         appVersion: app.version,
         appName: app.name,
-        language: app.isoLanguage
+        language: app.isoLanguage,
+        optimizedForAeRelease: "2026 (26.x)",
+        scriptingEngine: "ExtendScript"
     }, null, 2);
 }
 
@@ -2516,9 +2518,10 @@ function dispatchCommand(command, args) {
     }
 }
 
-// Execute command
-function executeCommand(command, args) {
+// Execute command (commandId correlates with Node ae_command.json / MCP waitForBridgeResult)
+function executeCommand(command, args, commandId) {
     var result = "";
+    commandId = commandId || "";
     
     logToPanel("Executing command: " + command);
     statusText.text = "Running: " + command;
@@ -2540,6 +2543,9 @@ function executeCommand(command, args) {
             resultObj._responseTimestamp = new Date().toISOString();
             resultObj._commandExecuted = command;
             resultObj._bridgeApiVersion = "2.0";
+            if (commandId) {
+                resultObj._commandId = commandId;
+            }
             resultString = JSON.stringify(resultObj, null, 2);
             logToPanel("Added timestamp to result JSON for tracking freshness.");
         } catch (parseError) {
@@ -2586,13 +2592,17 @@ function executeCommand(command, args) {
         // Write detailed error to result file
         try {
             logToPanel("Attempting to write ERROR to result file...");
-            var errorResult = JSON.stringify({ 
+            var errPayload = { 
                 status: "error", 
                 command: command,
                 message: error.toString(),
                 line: error.line,
                 fileName: error.fileName
-            });
+            };
+            if (commandId) {
+                errPayload._commandId = commandId;
+            }
+            var errorResult = JSON.stringify(errPayload);
             var errorFile = new File(getResultFilePath());
             errorFile.encoding = "UTF-8";
             if (errorFile.open("w")) {
@@ -2666,7 +2676,7 @@ function checkForCommands() {
                     updateCommandStatus("running");
                     
                     // Execute the command
-                    executeCommand(commandData.command, commandData.args || {});
+                    executeCommand(commandData.command, commandData.args || {}, commandData.commandId);
                 }
             }
         }
