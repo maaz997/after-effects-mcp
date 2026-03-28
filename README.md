@@ -5,6 +5,10 @@
 
 Bridge between **Cursor, Claude Code, or any MCP client** and **Adobe After Effects**. You describe what you want in natural language; the client talks to this server; the server drops commands on disk; a small ScriptUI panel inside After Effects picks them up and runs ExtendScript. No CEP panel and no hacky keystroke automation—just a file-based queue both sides can trust.
 
+**Compatibility:** This project is **developed and tested against Adobe After Effects 2026 (26.x)** — that is the version it is optimized for. After Effects 2025 (25.x) should largely work with the same panel and commands; older releases are unsupported and may hit scripting differences.
+
+Keep **`mcp-bridge-auto.jsx`** in sync with this repo (`yarn install-bridge`) so bridge results echo **`commandId`**; the server can fall back for an older panel, but matching is stricter when both sides send IDs.
+
 Maintained by **[maaz997](https://github.com/maaz997)** — [github.com/maaz997/after-effects-mcp](https://github.com/maaz997/after-effects-mcp)
 
 ---
@@ -25,7 +29,7 @@ If the panel isn’t open, commands queue on disk until you open it—nothing si
 
 ## Requirements
 
-- **After Effects** 2025 or **2026** (26.x tested). Older versions may work but the panel is built for current scripting APIs.
+- **After Effects 2026 (26.x)** — primary target; **2025 (25.x)** is expected to work. Use **26.x** for the fewest surprises.
 - **Node.js** 18+ (20 LTS recommended).
 - **yarn** or npm.
 
@@ -108,6 +112,8 @@ src/scripts/mcp-bridge-auto.jsx   # After Effects panel + ExtendScript API
 install-bridge.js         # Copy panel into AE Scripts folder
 build/                    # Produced by `yarn build` — what you ship / run
 ```
+
+Run **`yarn test`** to exercise bridge validation (no After Effects required).
 
 ---
 

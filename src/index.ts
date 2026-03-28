@@ -24,10 +24,34 @@ import {
   LayerIdentifierSchema,
   SCENE_SPEC_VERSION,
 } from "./constants.js";
-import { getDeniedCommandSet, validateBridgeParameters } from "./validate-bridge-command.js";
+import {
+  getDeniedCommandSet,
+  validateBridgeParametersFull,
+  type ValidationResult,
+} from "./validate-bridge-command.js";
 import { runAerender } from "./aerender-cli.js";
 
 const SERVER_VERSION = readPackageVersion();
+
+/** Default wait when a tool blocks on the bridge (matches run-script). */
+const DEFAULT_BRIDGE_WAIT_MS = 15_000;
+
+/** Shared by run-script and convenience bridge tools. */
+const bridgeWaitOptionsSchema = {
+  waitForResult: z
+    .boolean()
+    .optional()
+    .describe(
+      "If true, block until the bridge reports a result for this command (or timeout). Default: queue only."
+    ),
+  waitTimeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .max(120_000)
+    .optional()
+    .describe("Max milliseconds to wait when waitForResult is true (default 15000)."),
+};
 
 const server = new McpServer({
   name: "AfterEffectsServer",
@@ -42,10 +66,68 @@ function textErr(text: string) {
   return { content: [{ type: "text" as const, text }], isError: true as const };
 }
 
-server.resource("compositions", "aftereffects://compositions", async (uri) => {
+function validationErr(r: Extract<ValidationResult, { ok: false }>) {
+  return textErr(JSON.stringify({ error: true, code: r.code, message: r.message }, null, 2));
+}
+
+function bridgeWriteFailed(): ReturnType<typeof validationErr> {
+  return validationErr({
+    ok: false,
+    code: "BRIDGE_WRITE_FAILED",
+    message: "Could not write ae_command.json to the bridge folder (see server stderr).",
+  });
+}
+
+/** Clear the result file and write one command; returns commandId for correlation. */
+function queueBridgeCommand(
+  command: string,
+  args: Record<string, unknown>
+): { ok: true; commandId: string } | { ok: false } {
   clearResultsFile();
-  writeCommandFile("listCompositions", {});
-  const result = await waitForBridgeResult("listCompositions", 6000, 250);
+  const commandId = writeCommandFile(command, args);
+  if (!commandId) {
+    return { ok: false };
+  }
+  return { ok: true, commandId };
+}
+
+async function bridgeQueueOrWait(
+  bridgeCommand: string,
+  q: { ok: true; commandId: string },
+  waitForResult: boolean | undefined,
+  waitTimeoutMs: number | undefined,
+  queuedMessage: string
+) {
+  if (waitForResult) {
+    const timeout = waitTimeoutMs ?? DEFAULT_BRIDGE_WAIT_MS;
+    const result = await waitForBridgeResult(bridgeCommand, timeout, 250, q.commandId);
+    return textOk(result);
+  }
+  return textOk(queuedMessage);
+}
+
+server.resource("compositions", "aftereffects://compositions", async (uri) => {
+  const q = queueBridgeCommand("listCompositions", {});
+  if (!q.ok) {
+    return {
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "application/json",
+          text: JSON.stringify(
+            {
+              error: true,
+              code: "BRIDGE_WRITE_FAILED",
+              message: "Could not write ae_command.json to the bridge folder.",
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+  const result = await waitForBridgeResult("listCompositions", 6000, 250, q.commandId);
 
   return {
     contents: [
@@ -64,32 +146,22 @@ server.tool(
   {
     script: z.string().describe("Name of the predefined script to run"),
     parameters: z.record(z.any()).optional().describe("Optional parameters for the script"),
-    waitForResult: z
-      .boolean()
-      .optional()
-      .describe(
-        "If true, block until the bridge reports a result for this command (or timeout). Default: queue only."
-      ),
-    waitTimeoutMs: z
-      .number()
-      .int()
-      .positive()
-      .max(120_000)
-      .optional()
-      .describe("Max milliseconds to wait when waitForResult is true (default 15000)."),
+    ...bridgeWaitOptionsSchema,
   },
   async ({ script, parameters = {}, waitForResult, waitTimeoutMs }) => {
     const allowed = new Set<string>(ALLOWED_SCRIPT_NAMES);
     if (!allowed.has(script)) {
-      return textErr(
-        `Error: Script "${script}" is not allowed. Allowed scripts are: ${ALLOWED_SCRIPT_NAMES.join(", ")}`
-      );
+      return validationErr({
+        ok: false,
+        code: "SCRIPT_NOT_ALLOWED",
+        message: `Script "${script}" is not allowed. Allowed: ${ALLOWED_SCRIPT_NAMES.join(", ")}`,
+      });
     }
 
     const denied = getDeniedCommandSet();
-    const validationError = validateBridgeParameters(script, parameters, allowed, denied);
-    if (validationError) {
-      return textErr(`Error: ${validationError}`);
+    const vr = validateBridgeParametersFull(script, parameters, allowed, denied);
+    if (!vr.ok) {
+      return validationErr(vr);
     }
 
     const dryRun = parameters.dryRun === true;
@@ -108,21 +180,24 @@ server.tool(
     }
 
     try {
-      clearResultsFile();
       const bridgeArgs = { ...parameters };
       delete bridgeArgs.dryRun;
-      writeCommandFile(script, bridgeArgs as Record<string, unknown>);
+      const q = queueBridgeCommand(script, bridgeArgs as Record<string, unknown>);
+      if (!q.ok) {
+        return bridgeWriteFailed();
+      }
+      const commandId = q.commandId;
 
       if (waitForResult) {
-        const timeout = waitTimeoutMs ?? 15_000;
-        const result = await waitForBridgeResult(script, timeout, 250);
+        const timeout = waitTimeoutMs ?? DEFAULT_BRIDGE_WAIT_MS;
+        const result = await waitForBridgeResult(script, timeout, 250, commandId);
         return textOk(result);
       }
 
       return textOk(
-        `Command to run "${script}" has been queued.\n` +
-          `Please ensure the "MCP Bridge Auto" panel is open in After Effects.\n` +
-          `Use the "get-results" tool after a few seconds to check for results, or call run-script with waitForResult: true.`
+        `Command "${script}" queued (commandId: ${commandId}).\n` +
+          `Ensure the MCP Bridge Auto panel is open in After Effects.\n` +
+          `Use get-results after a few seconds, or run-script with waitForResult: true.`
       );
     } catch (error) {
       return textErr(`Error queuing command: ${String(error)}`);
@@ -231,14 +306,15 @@ To use this integration with After Effects, follow these steps:
 
 4. **Run scripts through MCP**
    - Use \`run-script\` to queue a command (optional: \`waitForResult: true\` to poll for JSON)
+   - Convenience tools (\`create-composition\`, \`setLayerKeyframe\`, \`setLayerExpression\`, \`apply-effect\`, \`apply-effect-template\`) accept the same \`waitForResult\` / \`waitTimeoutMs\` options
    - Use \`bridge-status\` if something fails (paths, stale files)
 
 5. **Get results**
-   - \`get-results\` after the bridge runs, or use \`run-script\` with \`waitForResult: true\`
+   - \`get-results\` after the bridge runs, or use \`run-script\` / convenience tools with \`waitForResult: true\`
 
 **Debugging:** set environment variable \`AE_MCP_DEBUG=1\` to log bridge paths and file sizes to stderr.
 
-**Bridge API 2.0:** Use \`getBridgeCapabilities\` in After Effects for app version info. Results include \`_bridgeApiVersion\`. Chain multiple operations with \`executeBatch\` (\`commands: [{ command, args }, ...]\`, optional \`continueOnError\`; max 100 steps, validated server-side). Prefer \`compName\` or \`compIndex\` (project item index) for compositions.
+**Bridge API 2.0:** Commands are written atomically with a \`commandId\`; results echo \`_commandId\` for correlation. Validation failures return JSON \`{ "error": true, "code": "...", "message": "..." }\`. Use \`getBridgeCapabilities\` in After Effects for app version info; results include \`_bridgeApiVersion\`. Chain operations with \`executeBatch\` (\`commands: [{ command, args }, ...]\`, optional \`continueOnError\`; max 100 steps). Prefer \`compName\` or \`compIndex\` for compositions.
 
 **Import safety:** \`importFootage\` rejects paths containing \`..\`. Set env \`AE_MCP_IMPORT_ROOT\` to restrict imports to one directory tree.
 
@@ -280,14 +356,23 @@ server.tool(
       })
       .optional()
       .describe("Background color of the composition (RGB values 0-255)"),
+    ...bridgeWaitOptionsSchema,
   },
   async (params) => {
     try {
-      writeCommandFile("createComposition", params);
-      return textOk(
-        `Command to create composition "${params.name}" has been queued.\n` +
+      const { waitForResult, waitTimeoutMs, ...bridgeParams } = params;
+      const q = queueBridgeCommand("createComposition", bridgeParams as Record<string, unknown>);
+      if (!q.ok) {
+        return bridgeWriteFailed();
+      }
+      return bridgeQueueOrWait(
+        "createComposition",
+        q,
+        waitForResult,
+        waitTimeoutMs,
+        `Command to create composition "${bridgeParams.name}" has been queued (commandId: ${q.commandId}).\n` +
           `Please ensure the "MCP Bridge Auto" panel is open in After Effects.\n` +
-          `Use the "get-results" tool after a few seconds to check for results.`
+          `Use the "get-results" tool after a few seconds to check for results, or pass waitForResult: true.`
       );
     } catch (error) {
       return textErr(`Error queuing composition creation: ${String(error)}`);
@@ -305,13 +390,22 @@ server.tool(
       .describe("Name of the property to keyframe (e.g., 'Position', 'Scale', 'Rotation', 'Opacity')."),
     timeInSeconds: z.number().describe("The time (in seconds) for the keyframe."),
     value: KeyframeValueSchema,
+    ...bridgeWaitOptionsSchema,
   },
   async (parameters) => {
     try {
-      writeCommandFile("setLayerKeyframe", parameters);
-      return textOk(
-        `Command to set keyframe for "${parameters.propertyName}" on layer ${parameters.layerIndex} in comp ${parameters.compIndex} has been queued.\n` +
-          `Use the "get-results" tool after a few seconds to check for confirmation.`
+      const { waitForResult, waitTimeoutMs, ...bridgeParams } = parameters;
+      const q = queueBridgeCommand("setLayerKeyframe", bridgeParams as Record<string, unknown>);
+      if (!q.ok) {
+        return bridgeWriteFailed();
+      }
+      return bridgeQueueOrWait(
+        "setLayerKeyframe",
+        q,
+        waitForResult,
+        waitTimeoutMs,
+        `Command to set keyframe for "${bridgeParams.propertyName}" on layer ${bridgeParams.layerIndex} in comp ${bridgeParams.compIndex} has been queued (commandId: ${q.commandId}).\n` +
+          `Use the "get-results" tool after a few seconds to check for confirmation, or pass waitForResult: true.`
       );
     } catch (error) {
       return textErr(`Error queuing setLayerKeyframe command: ${String(error)}`);
@@ -330,13 +424,22 @@ server.tool(
     expressionString: z
       .string()
       .describe('The JavaScript expression string. Use "" to remove the expression.'),
+    ...bridgeWaitOptionsSchema,
   },
   async (parameters) => {
     try {
-      writeCommandFile("setLayerExpression", parameters);
-      return textOk(
-        `Command to set expression for "${parameters.propertyName}" on layer ${parameters.layerIndex} in comp ${parameters.compIndex} has been queued.\n` +
-          `Use the "get-results" tool after a few seconds to check for confirmation.`
+      const { waitForResult, waitTimeoutMs, ...bridgeParams } = parameters;
+      const q = queueBridgeCommand("setLayerExpression", bridgeParams as Record<string, unknown>);
+      if (!q.ok) {
+        return bridgeWriteFailed();
+      }
+      return bridgeQueueOrWait(
+        "setLayerExpression",
+        q,
+        waitForResult,
+        waitTimeoutMs,
+        `Command to set expression for "${bridgeParams.propertyName}" on layer ${bridgeParams.layerIndex} in comp ${bridgeParams.compIndex} has been queued (commandId: ${q.commandId}).\n` +
+          `Use the "get-results" tool after a few seconds to check for confirmation, or pass waitForResult: true.`
       );
     } catch (error) {
       return textErr(`Error queuing setLayerExpression command: ${String(error)}`);
@@ -436,13 +539,22 @@ server.tool(
     effectCategory: z.string().optional().describe("Optional category for filtering effects."),
     presetPath: z.string().optional().describe("Optional path to an effect preset file (.ffx)."),
     effectSettings: z.record(z.any()).optional().describe("Optional parameters for the effect (e.g., { 'Blurriness': 25 })."),
+    ...bridgeWaitOptionsSchema,
   },
   async (parameters) => {
     try {
-      writeCommandFile("applyEffect", parameters);
-      return textOk(
-        `Command to apply effect to layer ${parameters.layerIndex} in composition ${parameters.compIndex} has been queued.\n` +
-          `Use the "get-results" tool after a few seconds to check for confirmation.`
+      const { waitForResult, waitTimeoutMs, ...bridgeParams } = parameters;
+      const q = queueBridgeCommand("applyEffect", bridgeParams as Record<string, unknown>);
+      if (!q.ok) {
+        return bridgeWriteFailed();
+      }
+      return bridgeQueueOrWait(
+        "applyEffect",
+        q,
+        waitForResult,
+        waitTimeoutMs,
+        `Command to apply effect to layer ${bridgeParams.layerIndex} in composition ${bridgeParams.compIndex} has been queued (commandId: ${q.commandId}).\n` +
+          `Use the "get-results" tool after a few seconds to check for confirmation, or pass waitForResult: true.`
       );
     } catch (error) {
       return textErr(`Error queuing apply-effect command: ${String(error)}`);
@@ -458,13 +570,22 @@ server.tool(
     layerIndex: z.number().int().positive().describe("1-based index of the target layer within the composition."),
     templateName: EffectTemplateSchema.describe("Name of the effect template to apply."),
     customSettings: z.record(z.any()).optional().describe("Optional custom settings to override defaults."),
+    ...bridgeWaitOptionsSchema,
   },
   async (parameters) => {
     try {
-      writeCommandFile("applyEffectTemplate", parameters);
-      return textOk(
-        `Command to apply effect template '${parameters.templateName}' to layer ${parameters.layerIndex} in composition ${parameters.compIndex} has been queued.\n` +
-          `Use the "get-results" tool after a few seconds to check for confirmation.`
+      const { waitForResult, waitTimeoutMs, ...bridgeParams } = parameters;
+      const q = queueBridgeCommand("applyEffectTemplate", bridgeParams as Record<string, unknown>);
+      if (!q.ok) {
+        return bridgeWriteFailed();
+      }
+      return bridgeQueueOrWait(
+        "applyEffectTemplate",
+        q,
+        waitForResult,
+        waitTimeoutMs,
+        `Command to apply effect template '${bridgeParams.templateName}' to layer ${bridgeParams.layerIndex} in composition ${bridgeParams.compIndex} has been queued (commandId: ${q.commandId}).\n` +
+          `Use the "get-results" tool after a few seconds to check for confirmation, or pass waitForResult: true.`
       );
     } catch (error) {
       return textErr(`Error queuing apply-effect-template command: ${String(error)}`);
@@ -487,9 +608,11 @@ server.tool(
   },
   async (parameters) => {
     try {
-      writeCommandFile("applyEffect", parameters);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      const result = readResultsFromTempFile();
+      const q = queueBridgeCommand("applyEffect", parameters as Record<string, unknown>);
+      if (!q.ok) {
+        return bridgeWriteFailed();
+      }
+      const result = await waitForBridgeResult("applyEffect", DEFAULT_BRIDGE_WAIT_MS, 250, q.commandId);
       return textOk(result);
     } catch (error) {
       return textErr(`Error applying effect: ${String(error)}`);
@@ -508,9 +631,11 @@ server.tool(
   },
   async (parameters) => {
     try {
-      writeCommandFile("applyEffectTemplate", parameters);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      const result = readResultsFromTempFile();
+      const q = queueBridgeCommand("applyEffectTemplate", parameters as Record<string, unknown>);
+      if (!q.ok) {
+        return bridgeWriteFailed();
+      }
+      const result = await waitForBridgeResult("applyEffectTemplate", DEFAULT_BRIDGE_WAIT_MS, 250, q.commandId);
       return textOk(result);
     } catch (error) {
       return textErr(`Error applying effect template: ${String(error)}`);
@@ -622,17 +747,16 @@ server.tool(
 
 server.tool(
   "run-bridge-test",
-  "Run the bridge test effects script to verify communication and apply test effects",
+  "Run the bridge test effects script to verify communication; blocks until After Effects returns a result (or timeout).",
   {},
   async () => {
     try {
-      clearResultsFile();
-      writeCommandFile("bridgeTestEffects", {});
-      return textOk(
-        `Bridge test effects command has been queued.\n` +
-          `Please ensure the "MCP Bridge Auto" panel is open in After Effects.\n` +
-          `Use the "get-results" tool after a few seconds to check for the test results.`
-      );
+      const q = queueBridgeCommand("bridgeTestEffects", {});
+      if (!q.ok) {
+        return bridgeWriteFailed();
+      }
+      const result = await waitForBridgeResult("bridgeTestEffects", DEFAULT_BRIDGE_WAIT_MS, 250, q.commandId);
+      return textOk(result);
     } catch (error) {
       return textErr(`Error queuing bridge test command: ${String(error)}`);
     }
