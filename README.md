@@ -1,93 +1,60 @@
-# 🎬 After Effects MCP Server
+# after-effects-mcp
 
-![Node.js](https://img.shields.io/badge/node-%3E=14.x-brightgreen.svg)
-![Build](https://img.shields.io/badge/build-passing-success)
-![License](https://img.shields.io/github/license/maaz997/after-effects-mcp)
-![Platform](https://img.shields.io/badge/platform-after%20effects-blue)
+[![License: MIT](https://img.shields.io/github/license/maaz997/after-effects-mcp)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 
-✨ A Model Context Protocol (MCP) server for Adobe After Effects that enables AI assistants and other applications to control After Effects through a standardized protocol.
+Bridge between **Cursor, Claude Code, or any MCP client** and **Adobe After Effects**. You describe what you want in natural language; the client talks to this server; the server drops commands on disk; a small ScriptUI panel inside After Effects picks them up and runs ExtendScript. No CEP panel and no hacky keystroke automation—just a file-based queue both sides can trust.
 
-**Repository:** [github.com/maaz997/after-effects-mcp](https://github.com/maaz997/after-effects-mcp)
+Maintained by **[maaz997](https://github.com/maaz997)** — [github.com/maaz997/after-effects-mcp](https://github.com/maaz997/after-effects-mcp)
 
-## Table of Contents
-- [Features](#features)
-  - [Core Composition Features](#core-composition-features)
-  - [Layer Management](#layer-management)
-  - [Animation Capabilities](#animation-capabilities)
-- [Setup Instructions](#setup-instructions)
-  - [Prerequisites](#prerequisites)
-  - [Installation](#installation)
-  - [Update MCP Config](#Update-MCP-Config)
-  - [Running the Server](#running-the-server)
-- [Usage Guide](#usage-guide)
-  - [Creating Compositions](#creating-compositions)
-  - [Working with Layers](#working-with-layers)
-  - [Animation](#animation)
-- [Available MCP Tools](#available-mcp-tools)
-- [For Developers](#for-developers)
-  - [Project Structure](#project-structure)
-  - [Building the Project](#building-the-project)
-  - [Contributing](#contributing)
-- [License](#license)
+---
 
-## 📦 Features
+## Why this shape?
 
-### 🎥 Core Composition Features
-- **Create compositions** with custom settings (size, frame rate, duration, background color)
-- **List all compositions** in a project
-- **Get project information** such as frame rate, dimensions, and duration
+After Effects already speaks **ExtendScript**. The hard part is getting a *deterministic* path from an LLM to that runtime without embedding a full plugin stack. This project splits the problem:
 
-### 🧱 Layer Management
-- **Create text layers** with customizable properties (font, size, color, position)
-- **Create shape layers** (rectangle, ellipse, polygon, star) with colors and strokes
-- **Create solid/adjustment layers** for backgrounds and effects
-- **Modify layer properties** like position, scale, rotation, opacity, and timing
+| Piece | Role |
+|--------|------|
+| **Node (this repo)** | MCP server: validates commands, optional batching, optional `aerender` spawn. |
+| **`~/Documents/ae-mcp-bridge/`** | Shared folder: `ae_command.json` in, `ae_mcp_result.json` out. |
+| **`mcp-bridge-auto.jsx`** | Floating panel (required on **AE 25+**): watches the folder and executes allowlisted handlers. |
 
-### 🌀 Animation Capabilities
-- **Set keyframes** for layer properties (Position, Scale, Rotation, Opacity, etc.)
-- **Apply expressions** to layer properties for dynamic animations
+If the panel isn’t open, commands queue on disk until you open it—nothing silently fails in the Node process without you knowing.
 
-## ⚙️ Setup Instructions
+---
 
-### 🛠 Prerequisites
-- Adobe After Effects (2022 or later)
-- Node.js (v14 or later)
-- npm or yarn package manager
+## Requirements
 
-### 📥 Installation
+- **After Effects** 2025 or **2026** (26.x tested). Older versions may work but the panel is built for current scripting APIs.
+- **Node.js** 18+ (20 LTS recommended).
+- **yarn** or npm.
 
-1. **Clone the repository**
-   ```bash
-   git clone git@github.com:maaz997/after-effects-mcp.git
-   cd after-effects-mcp
-   ```
-   (HTTPS: `git clone https://github.com/maaz997/after-effects-mcp.git`)
+---
 
-2. **Install dependencies**
-   ```bash
-   npm install
-   # or
-   yarn install
-   ```
+## Quick start
 
-3. **Build the project**
-   ```bash
-   npm run build
-   # or
-   yarn build
-   ```
+```bash
+git clone git@github.com:maaz997/after-effects-mcp.git
+cd after-effects-mcp
+yarn install
+yarn build
+yarn install-bridge
+```
 
-4. **Install the After Effects panel**
-   ```bash
-   npm run install-bridge
-   # or
-   yarn install-bridge
-   ```
-   This will copy the necessary scripts to your After Effects installation.
+`install-bridge` copies `build/scripts/mcp-bridge-auto.jsx` into your After Effects **ScriptUI Panels** folder (may need admin rights on macOS/Windows).
 
-### 🔧 Update MCP Config
+Then:
 
-Go to your client (eg. Claude or Cursor ) and update your config file
+1. Launch After Effects, open your project.
+2. **Window →** the **MCP Bridge Auto** panel (floating window on AE 25+).
+3. Enable **Auto-run commands** in the panel.
+4. Start the MCP server from your editor config (below).
+
+---
+
+## Wire it to Cursor (or any MCP host)
+
+Point `command` at the built entrypoint—use an **absolute path** on your machine:
 
 ```json
 {
@@ -100,113 +67,50 @@ Go to your client (eg. Claude or Cursor ) and update your config file
 }
 ```
 
-### ▶️ Running the Server
+Run `yarn start` manually only if you are debugging; normally the IDE launches the server.
 
-1. **Start the MCP server**
-   ```bash
-   npm start
-   # or
-   yarn start
-   ```
+---
 
-2. **Open After Effects**
+## Environment variables (optional)
 
-3. **Open the MCP Bridge Auto panel**
-   - In After Effects, go to Window > mcp-bridge-auto.jsx
-   - The panel will automatically check for commands every few seconds
-   - Make sure the "Auto-run commands" checkbox is enabled
+| Variable | Purpose |
+|----------|---------|
+| `AE_MCP_DEBUG=1` | Log bridge paths / file sizes on stderr. |
+| `AE_MCP_IMPORT_ROOT` | Restrict `importFootage` paths to a single directory tree. |
+| `AE_MCP_DENIED_COMMANDS` | Comma-separated bridge command names to block entirely. |
+| `AE_AERENDER_PATH` | Full path to `aerender` if not next to a default AE 2026 install. |
 
-## 🚀 Usage Guide
+---
 
-Once you have the server running and the MCP Bridge panel open in After Effects, you can control After Effects through the MCP protocol. This allows AI assistants or custom applications to send commands to After Effects.
+## What it can drive
 
-### 📘 Creating Compositions
+The server exposes many MCP tools (`run-script`, `get-results`, `get-help`, `bridge-status`, composition/layer helpers, `executeBatch`, `applySceneSpec`, expression snippets, optional `run-aerender`, etc.). The **source of truth** for names and parameters is whatever your client lists after install, or call **`get-help`** once the bridge is connected.
 
-You can create new compositions with custom settings:
-- Name
-- Width and height (in pixels)
-- Frame rate
-- Duration
-- Background color
+High-level capabilities include:
 
-Example MCP tool usage (for developers):
-```javascript
-mcp_aftereffects_create_composition({
-  name: "My Composition", 
-  width: 1920, 
-  height: 1080, 
-  frameRate: 30,
-  duration: 10
-});
+- Comps, layers (text, shape, solid, null, camera, light), parenting, mattes, masks, effects and effect stacks  
+- Keyframes, expressions, time remap, markers, scene-style JSON specs, batched command lists  
+- Footage import (with path checks), render queue queueing, and optional CLI render via `aerender`  
+
+Recipe-style JSON lives under **`examples/recipes/`** as a starting point for `applySceneSpec`.
+
+---
+
+## Repo layout
+
+```
+src/index.ts              # MCP server (stdio)
+src/bridge.ts             # Paths + result polling
+src/constants.ts          # Allowlisted bridge command names
+src/validate-bridge-command.ts
+src/aerender-cli.ts
+src/scripts/mcp-bridge-auto.jsx   # After Effects panel + ExtendScript API
+install-bridge.js         # Copy panel into AE Scripts folder
+build/                    # Produced by `yarn build` — what you ship / run
 ```
 
-### ✍️ Working with Layers
-
-You can create and modify different types of layers:
-
-**Text layers:**
-- Set text content, font, size, and color
-- Position text anywhere in the composition
-- Adjust timing and opacity
-
-**Shape layers:**
-- Create rectangles, ellipses, polygons, and stars
-- Set fill and stroke colors
-- Customize size and position
-
-**Solid layers:**
-- Create background colors
-- Make adjustment layers for effects
-
-### 🕹 Animation
-
-You can animate layers with:
-
-**Keyframes:**
-- Set property values at specific times
-- Create motion, scaling, rotation, and opacity changes
-- Control the timing of animations
-
-**Expressions:**
-- Apply JavaScript expressions to properties
-- Create dynamic, procedural animations
-- Connect property values to each other
-
-## 🛠 Available MCP Tools
-
-| Command              | Description                            |
-|----------------------|----------------------------------------|
-| \`create-composition\` | Create a new comp                      |
-| \`run-script\`         | Run a JS script inside AE              |
-| \`get-results\`        | Get script results                     |
-| \`get-help\`           | Help for available commands            |
-| \`setLayerKeyframe\`   | Add keyframe to layer property         |
-| \`setLayerExpression\` | Add/remove expressions from properties |
-
-## 👨‍💻 For Developers
-
-### 🧩 Project Structure
-
-- `src/index.ts`: MCP server implementation
-- `src/scripts/mcp-bridge-auto.jsx`: Main After Effects panel script
-- `install-bridge.js`: Script to install the panel in After Effects
-
-### 📦 Building the Project
-
-```bash
-npm run build
-# or
-yarn build
-```
-
-### 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=maaz997/after-effects-mcp&type=date&legend=top-left)](https://www.star-history.com/#maaz997/after-effects-mcp&type=date&legend=top-left)
+---
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT — see [LICENSE](LICENSE).
